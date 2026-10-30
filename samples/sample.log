@@ -1,0 +1,5 @@
+2026-10-30 09:15:01|INFO|SYSTEM|Startup complete
+2026-10-30 09:15:03|WARN|NETWORK|Connection latency elevated
+2026-10-30 09:15:07|ERROR|AUDIO|Device initialization failed
+2026-10-30 09:15:10|ERROR|NETWORK|Connection timeout
+2026-10-30 09:15:12|ERROR|NETWORK|Connection timeout
