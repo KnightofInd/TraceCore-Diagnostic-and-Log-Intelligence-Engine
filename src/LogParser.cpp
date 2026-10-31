@@ -6,8 +6,18 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace {
+
+std::string trim(std::string_view text) {
+    const auto first = text.find_first_not_of(" \t");
+    if (first == std::string_view::npos) {
+        return {};
+    }
+    const auto last = text.find_last_not_of(" \t");
+    return std::string(text.substr(first, last - first + 1));
+}
 
 bool is_digits(std::string_view text, std::size_t count) {
     if (text.size() != count) {
@@ -69,6 +79,105 @@ ParseResult failure(std::string reason) {
     return ParseDiagnostic{std::move(reason)};
 }
 
+bool parse_json_string(std::string_view text, std::size_t& index,
+                       std::string& value) {
+    if (index >= text.size() || text[index] != '"') {
+        return false;
+    }
+    ++index;
+    while (index < text.size() && text[index] != '"') {
+        if (text[index] == '\\') {
+            ++index;
+            if (index >= text.size()) {
+                return false;
+            }
+            switch (text[index]) {
+            case '"': value += '"'; break;
+            case '\\': value += '\\'; break;
+            case '/': value += '/'; break;
+            case 'b': value += '\b'; break;
+            case 'f': value += '\f'; break;
+            case 'n': value += '\n'; break;
+            case 'r': value += '\r'; break;
+            case 't': value += '\t'; break;
+            default: return false;
+            }
+        } else {
+            value += text[index];
+        }
+        ++index;
+    }
+    if (index >= text.size()) {
+        return false;
+    }
+    ++index;
+    return true;
+}
+
+bool json_field(std::string_view line, std::string_view key,
+                std::string& value) {
+    const std::string token = "\"" + std::string(key) + "\"";
+    const auto key_position = line.find(token);
+    if (key_position == std::string_view::npos) {
+        return false;
+    }
+    auto index = line.find(':', key_position + token.size());
+    if (index == std::string_view::npos) {
+        return false;
+    }
+    ++index;
+    while (index < line.size() && (line[index] == ' ' || line[index] == '\t')) {
+        ++index;
+    }
+    return parse_json_string(line, index, value);
+}
+
+ParseResult parse_json_lines(std::string_view line, std::size_t source_line) {
+    std::string timestamp;
+    std::string severity;
+    std::string component;
+    std::string message;
+    if (line.empty() || !json_field(line, "timestamp", timestamp) ||
+        !json_field(line, "severity", severity) ||
+        !json_field(line, "component", component) ||
+        !json_field(line, "message", message)) {
+        return failure("invalid JSON Lines record; expected string fields "
+                       "timestamp, severity, component, and message");
+    }
+    return LogParser{}.parse(timestamp + "|" + severity + "|" + component +
+                                 "|" + message,
+                             InputFormat::Pipe, source_line);
+}
+
+ParseResult parse_csv(std::string_view line, std::size_t source_line) {
+    std::vector<std::string> fields;
+    std::string field;
+    bool quoted = false;
+    for (std::size_t index = 0; index <= line.size(); ++index) {
+        const char character = index < line.size() ? line[index] : ',';
+        if (character == '"' && (quoted || field.empty())) {
+            if (quoted && index + 1 < line.size() && line[index + 1] == '"') {
+                field += '"';
+                ++index;
+            } else {
+                quoted = !quoted;
+            }
+        } else if (character == ',' && !quoted) {
+            fields.push_back(trim(field));
+            field.clear();
+        } else {
+            field += character;
+        }
+    }
+    if (quoted || fields.size() != 4) {
+        return failure("invalid CSV record; expected timestamp,severity,"
+                       "component,message");
+    }
+    return LogParser{}.parse(fields[0] + "|" + fields[1] + "|" + fields[2] +
+                                 "|" + fields[3],
+                             InputFormat::Pipe, source_line);
+}
+
 }  // namespace
 
 bool operator==(const LogTimestamp& left, const LogTimestamp& right) {
@@ -82,7 +191,14 @@ bool operator<(const LogTimestamp& left, const LogTimestamp& right) {
            std::tie(right.year, right.month, right.day, right.hour, right.minute, right.second);
 }
 
-ParseResult LogParser::parse(std::string_view line, std::size_t source_line) const {
+ParseResult LogParser::parse(std::string_view line, InputFormat format,
+                             std::size_t source_line) const {
+    if (format == InputFormat::JsonLines) {
+        return parse_json_lines(line, source_line);
+    }
+    if (format == InputFormat::Csv) {
+        return parse_csv(line, source_line);
+    }
     if (line.empty()) {
         return failure("record is empty");
     }

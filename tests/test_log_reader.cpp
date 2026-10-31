@@ -5,6 +5,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -97,4 +98,29 @@ TEST(LogReaderTest, MissingFileIsFatal) {
     EXPECT_FALSE(result.succeeded());
     ASSERT_TRUE(result.fatal_error.has_value());
     EXPECT_NE(result.fatal_error->find("unable to open"), std::string::npos);
+}
+
+TEST(LogReaderTest, ReadsRecordsFromInputStream) {
+    std::istringstream input(
+        "2026-10-30 09:15:01|INFO|SYSTEM|Started\n"
+        "2026-10-30 09:15:02|ERROR|AUDIO|Failed\n");
+
+    const ReadResult result = LogReader{}.read(input, false);
+
+    ASSERT_TRUE(result.succeeded());
+    ASSERT_EQ(result.entries.size(), 2);
+    EXPECT_EQ(result.entries[0].source_line, 1);
+    EXPECT_EQ(result.entries[1].source_line, 2);
+}
+
+TEST(LogReaderTest, ReportsInputStreamReadFailure) {
+    std::istringstream input(
+        "2026-10-30 09:15:01|INFO|SYSTEM|Started\n");
+    input.setstate(std::ios::badbit);
+
+    const ReadResult result = LogReader{}.read(input, false);
+
+    EXPECT_FALSE(result.succeeded());
+    ASSERT_TRUE(result.fatal_error.has_value());
+    EXPECT_EQ(*result.fatal_error, "failed while reading input stream");
 }

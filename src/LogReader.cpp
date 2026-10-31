@@ -3,16 +3,32 @@
 #include "LogParser.h"
 
 #include <fstream>
-#include <utility>
 
-ReadResult LogReader::read(const std::string& path, bool strict) const {
-    ReadResult result;
+ReadResult LogReader::read(const std::string& path, bool strict,
+                           InputFormat format) const {
     std::ifstream input(path);
     if (!input.is_open()) {
-        result.fatal_error = "unable to open input file: " + path;
-        return result;
+        return ReadResult{
+            {},
+            {},
+            "unable to open input file: " + path,
+            false,
+        };
     }
 
+    ReadResult result = read(input, strict, format);
+    for (auto& diagnostic : result.diagnostics) {
+        diagnostic.source = path;
+    }
+    if (input.bad()) {
+        result.fatal_error = "failed while reading input file: " + path;
+    }
+    return result;
+}
+
+ReadResult LogReader::read(std::istream& input, bool strict,
+                           InputFormat format) const {
+    ReadResult result;
     LogParser parser;
     std::string line;
     std::size_t source_line = 0;
@@ -21,14 +37,14 @@ ReadResult LogReader::read(const std::string& path, bool strict) const {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
-        ParseResult parsed = parser.parse(line, source_line);
+        ParseResult parsed = parser.parse(line, format, source_line);
         if (const auto* entry = std::get_if<LogEntry>(&parsed)) {
             result.entries.push_back(*entry);
             continue;
         }
 
         const auto& diagnostic = std::get<ParseDiagnostic>(parsed);
-        result.diagnostics.push_back({source_line, diagnostic.reason});
+        result.diagnostics.push_back({source_line, diagnostic.reason, {}});
         if (strict) {
             result.strict_validation_failure = true;
             break;
@@ -36,8 +52,7 @@ ReadResult LogReader::read(const std::string& path, bool strict) const {
     }
 
     if (input.bad()) {
-        result.fatal_error = "failed while reading input file: " + path;
+        result.fatal_error = "failed while reading input stream";
     }
-
     return result;
 }

@@ -2,6 +2,7 @@
 
 #include "LogSeverity.h"
 
+#include <algorithm>
 #include <string_view>
 #include <iostream>
 #include <utility>
@@ -21,12 +22,13 @@ bool has_value(const std::string& value) {
 
 CommandLineResult parse_command_line(int argc, char* argv[]) {
     CommandLineOptions options;
-    bool input_seen = false;
     bool output_seen = false;
     bool severity_seen = false;
     bool component_seen = false;
     bool strict_seen = false;
     bool help_seen = false;
+    bool format_seen = false;
+    bool input_format_seen = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
@@ -56,15 +58,11 @@ CommandLineResult parse_command_line(int argc, char* argv[]) {
         };
 
         if (argument == "--input") {
-            if (input_seen) {
-                return error("--input may only be specified once");
-            }
             auto value = value_for();
             if (!value.has_value()) {
                 return error("--input requires a non-empty path");
             }
-            options.input_path = *value;
-            input_seen = true;
+            options.input_paths.push_back(*value);
         } else if (argument == "--output") {
             if (output_seen) {
                 return error("--output may only be specified once");
@@ -99,6 +97,41 @@ CommandLineResult parse_command_line(int argc, char* argv[]) {
             }
             options.filter.component = *value;
             component_seen = true;
+        } else if (argument == "--format") {
+            if (format_seen) {
+                return error("--format may only be specified once");
+            }
+            auto value = value_for();
+            if (!value.has_value()) {
+                return error("--format requires text or json");
+            }
+            if (*value == "text") {
+                options.format = OutputFormat::Text;
+            } else if (*value == "json") {
+                options.format = OutputFormat::Json;
+            } else {
+                return error("invalid format: " + *value +
+                             "; expected text or json");
+            }
+            format_seen = true;
+        } else if (argument == "--input-format") {
+            if (input_format_seen) {
+                return error("--input-format may only be specified once");
+            }
+            auto value = value_for();
+            if (!value.has_value()) {
+                return error("--input-format requires pipe, jsonl, or csv");
+            }
+            if (*value == "pipe") {
+                options.input_format = InputFormat::Pipe;
+            } else if (*value == "jsonl") {
+                options.input_format = InputFormat::JsonLines;
+            } else if (*value == "csv") {
+                options.input_format = InputFormat::Csv;
+            } else {
+                return error("invalid input format: " + *value);
+            }
+            input_format_seen = true;
         } else {
             return error("unknown option: " + std::string(argument));
         }
@@ -107,8 +140,14 @@ CommandLineResult parse_command_line(int argc, char* argv[]) {
     if (options.help) {
         return options;
     }
-    if (!input_seen) {
+    if (options.input_paths.empty()) {
         return error("--input is required");
+    }
+    const bool has_standard_input =
+        std::find(options.input_paths.begin(), options.input_paths.end(), "-") !=
+        options.input_paths.end();
+    if (has_standard_input && options.input_paths.size() > 1) {
+        return error("standard input (-) cannot be combined with file inputs");
     }
     return options;
 }
@@ -117,10 +156,12 @@ void print_help() {
     std::cout << "Usage: log_analyzer --input PATH [options]\n"
                  "\n"
                  "Options:\n"
-                 "  --input PATH          Input log file (required)\n"
+                 "  --input PATH          Input file, or - for standard input; repeatable\n"
                  "  --severity LEVEL      Filter by INFO, WARN, or ERROR\n"
                  "  --component NAME      Filter by component\n"
                  "  --strict              Fail on the first malformed record\n"
                  "  --output PATH         Write the report to a file\n"
+                 "  --format FORMAT       Output format: text (default) or json\n"
+                 "  --input-format FORMAT Input format: pipe (default), jsonl, or csv\n"
                  "  --help                Show this help message\n";
 }

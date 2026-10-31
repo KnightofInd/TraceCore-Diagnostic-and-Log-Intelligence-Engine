@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -51,15 +52,41 @@ int main(int argc, char* argv[]) {
         return kSuccess;
     }
 
-    const ReadResult read_result =
-        LogReader{}.read(options.input_path, options.strict);
+    LogReader reader;
+    ReadResult read_result;
+    for (const auto& input_path : options.input_paths) {
+        ReadResult current = input_path == "-"
+                                 ? reader.read(std::cin, options.strict,
+                                               options.input_format)
+                                 : reader.read(input_path, options.strict,
+                                               options.input_format);
+        if (input_path == "-") {
+            for (auto& diagnostic : current.diagnostics) {
+                diagnostic.source = "<stdin>";
+            }
+        }
+        read_result.entries.insert(read_result.entries.end(),
+                                   current.entries.begin(), current.entries.end());
+        read_result.diagnostics.insert(read_result.diagnostics.end(),
+                                       current.diagnostics.begin(),
+                                       current.diagnostics.end());
+        if (current.fatal_error.has_value()) {
+            read_result.fatal_error = current.fatal_error;
+            break;
+        }
+        if (current.strict_validation_failure) {
+            read_result.strict_validation_failure = true;
+            break;
+        }
+    }
     if (read_result.fatal_error.has_value()) {
         std::cerr << "Error: " << *read_result.fatal_error << '\n';
         return kProcessingFailure;
     }
     if (read_result.strict_validation_failure) {
         for (const auto& diagnostic : read_result.diagnostics) {
-            std::cerr << "Line " << diagnostic.source_line << ": "
+            std::cerr << (diagnostic.source.empty() ? "" : diagnostic.source + ": ")
+                      << "Line " << diagnostic.source_line << ": "
                       << diagnostic.reason << '\n';
         }
         return kStrictValidationFailure;
@@ -67,7 +94,11 @@ int main(int argc, char* argv[]) {
 
     const AnalysisResult analysis =
         LogAnalyzer{}.analyze(read_result.entries, options.filter);
-    const std::string report =
-        ReportFormatter{}.format(analysis, read_result.diagnostics);
+    const ReportFormatter formatter;
+    const std::string report = options.format == OutputFormat::Json
+                                    ? formatter.format_json(
+                                          analysis, read_result.diagnostics)
+                                    : formatter.format(
+                                          analysis, read_result.diagnostics);
     return write_report(report, options.output_path);
 }

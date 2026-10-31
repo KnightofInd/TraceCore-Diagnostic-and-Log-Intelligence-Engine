@@ -10,4 +10,7 @@ class ReportFormatter {
 public:
     std::string format(const AnalysisResult& analysis,
                        const std::vector<ReaderDiagnostic>& diagnostics = {}) const;
+    std::string format_json(
+        const AnalysisResult& analysis,
+        const std::vector<ReaderDiagnostic>& diagnostics = {}) const;
 };

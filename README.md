@@ -1,108 +1,309 @@
-# C++ Log Analyzer
-
-This repository contains the planned foundation for an offline C++17 command-line
-log analyzer. The project is intentionally being implemented incrementally.
-
-## Phase 0: Domain contract
-
-The following decisions are fixed for version 1:
-
-- A record has the form
-  `YYYY-MM-DD HH:MM:SS|SEVERITY|COMPONENT|MESSAGE`.
-- Timestamps are timezone-unspecified diagnostic timestamps. The application does
-  not convert them to local time or UTC.
-- Calendar dates and clock values are validated strictly.
-- Severity is one of `INFO`, `WARN`, or `ERROR`.
-- The first three pipe characters are structural separators. Additional pipes
-  remain part of the message.
-- Components and messages must not be empty. A blank line is a malformed record.
-- A trailing pipe after the third separator is preserved as part of the message.
-- Lenient reading is the default: malformed records are skipped and reported.
-  `--strict` stops processing at the first malformed record.
-- Repeated errors are identical message strings from `ERROR` records that occur
-  more than once. No fuzzy matching or root-cause inference is performed.
-- Repeated CLI options are rejected. Filtering options may be combined.
-- An empty file is valid and produces an empty analysis. Lenient input with no
-  valid records produces an empty analysis plus diagnostics.
-
-The timestamp contract deliberately does not assign a timezone because these
-logs are diagnostic records rather than instants intended for conversion.
-
-## Planned structure
+<div align="center">
 
 ```text
-include/                 Public domain and processing interfaces
-src/                     Core implementation and CLI entry point
-tests/                   Google Test unit and integration tests
-samples/                 Representative input logs
-.github/workflows/       Continuous integration
+╔══════════════════════════════════════════════════════════════════════╗
+║  █████╗ ██████╗  █████╗  ██████╗███████╗ ██████╗ ██████╗ ███████╗  ║
+║ ██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝  ║
+║ ███████║██████╔╝███████║██║     █████╗  ██║   ██║██████╔╝█████╗    ║
+║ ██╔══██║██╔═══╝ ██╔══██║██║     ██╔══╝  ██║   ██║██╔══██╗██╔══╝    ║
+║ ██║  ██║██║     ██║  ██║╚██████╗███████╗╚██████╔╝██║  ██║███████╗  ║
+║ ╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝  ║
+╚══════════════════════════════════════════════════════════════════════╝
 ```
 
-## Build prerequisites
+### `offline diagnostics // deterministic analysis // C++17`
 
-- CMake 3.16 or newer
-- A C++17-capable GCC or Clang toolchain
-- Internet access on the first configure if Google Test is not installed
-  locally; CMake will fetch the pinned Google Test release
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-7d5fff?style=flat-square)](https://isocpp.org/)
+[![CMake](https://img.shields.io/badge/build-CMake-44aa66?style=flat-square)](https://cmake.org/)
+[![Tests](https://img.shields.io/badge/tests-28%20passing-44aa66?style=flat-square)](#testing-and-quality)
 
-The initial implementation targets Ubuntu Linux or WSL2. The commands below
-are also suitable for a native Linux environment.
+</div>
 
-## Configure, build, and test
+> A small, offline command-line utility that validates structured diagnostic
+> logs, analyzes failures, and produces deterministic text or JSON reports.
+
+```text
+┌─[log-analyzer]────────────────────────────────────────────────────────┐
+│ status  : READY                                                       │
+│ input   : samples/sample.log                                         │
+│ records : 5                                                           │
+│ errors  : 3                                                           │
+│ result  : deterministic report generated                              │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+## 01 · Project overview
+
+Log Analyzer turns structured records into useful diagnostic summaries without
+network access, databases, hardware integration, or external services. It is
+designed as a maintainable C++ learning and engineering project demonstrating
+file I/O, validation, modular design, testing, CMake, diagnostics, and CI.
+
+The tool accepts one or more files, standard input, or a selected record format.
+It can filter by severity and component, detect repeated errors, identify the
+time range, and write reports to the terminal or a file.
+
+## 02 · Capabilities
+
+| Capability | Description |
+|---|---|
+| `pipe` input | `timestamp|severity|component|message` records |
+| `jsonl` input | One JSON object per line |
+| `csv` input | Four-field CSV records with quoted fields |
+| Multi-file input | Repeat `--input` for multiple files |
+| Standard input | Use `--input -` in a pipeline |
+| Validation | Calendar, clock, severity, and field validation |
+| Recovery modes | Lenient diagnostics or strict fail-fast processing |
+| Filtering | Severity, component, or both |
+| Analysis | Counts, error components, repeated messages, time range |
+| Reports | Human-readable text or dependency-free JSON |
+| Determinism | Explicit ordering and stable output |
+
+## 03 · Demo
+
+### Build and run
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
+./build/log_analyzer --input samples/sample.log
+```
+
+### Terminal output
+
+```text
+Log Analysis Report
+===================
+Total records: 5
+INFO: 1
+WARN: 1
+ERROR: 3
+
+Errors by component:
+  AUDIO: 1
+  NETWORK: 2
+
+Repeated errors:
+  Connection timeout: 2
+
+Time range:
+  Earliest: 2026-10-30 09:15:01
+  Latest: 2026-10-30 09:15:12
+
+Parse diagnostics: 0
+```
+
+### JSON report
+
+```bash
+./build/log_analyzer \
+  --input samples/sample.log \
+  --format json \
+  --output report.json
+```
+
+## 04 · Architecture
+
+```mermaid
+flowchart LR
+    CLI["CommandLine<br/>argument validation"] --> Reader["LogReader<br/>file or stream I/O"]
+    Reader --> Parser["LogParser<br/>format and field validation"]
+    Parser --> Domain["LogEntry<br/>shared domain model"]
+    Domain --> Analyzer["LogAnalyzer<br/>filters and statistics"]
+    Analyzer --> Formatter["ReportFormatter<br/>text or JSON"]
+    Formatter --> Destination["stdout or output file"]
+
+    style CLI fill:#241b3d,stroke:#9b7dff,color:#fff
+    style Parser fill:#241b3d,stroke:#9b7dff,color:#fff
+    style Analyzer fill:#14382b,stroke:#56d98b,color:#fff
+    style Formatter fill:#14382b,stroke:#56d98b,color:#fff
+```
+
+### Module responsibilities
+
+| Module | Responsibility |
+|---|---|
+| `LogSeverity` | Strongly typed `INFO`, `WARN`, and `ERROR` values |
+| `LogEntry` | Timestamped domain record and timestamp comparisons |
+| `LogParser` | Parses pipe, JSON Lines, and CSV records |
+| `LogReader` | Reads files/streams, tracks lines, applies strict/lenient policy |
+| `LogAnalyzer` | Filters records and calculates diagnostic statistics |
+| `ReportFormatter` | Renders structured results as text or JSON |
+| `CommandLine` | Validates CLI options without business logic |
+| `main` | Coordinates the application and maps exit codes |
+
+## 05 · Processing pipeline
+
+```mermaid
+flowchart TD
+    A["Input source"] --> B{"Input format"}
+    B -->|pipe| C["Pipe parser"]
+    B -->|jsonl| D["JSONL parser"]
+    B -->|csv| E["CSV parser"]
+    C --> F["Validated LogEntry"]
+    D --> F
+    E --> F
+    F --> G{"Strict mode?"}
+    G -->|invalid + strict| H["Diagnostic + exit 3"]
+    G -->|invalid + lenient| I["Diagnostic + continue"]
+    G -->|valid| J["Apply filters"]
+    I --> J
+    J --> K["Aggregate statistics"]
+    K --> L{"Output format"}
+    L -->|text| M["Terminal report"]
+    L -->|json| N["JSON report"]
+
+    style H fill:#4b2020,stroke:#ff7777,color:#fff
+    style I fill:#3d3216,stroke:#e5c454,color:#fff
+    style K fill:#14382b,stroke:#56d98b,color:#fff
+```
+
+## 06 · Technology stack
+
+| Area | Choice | Reason |
+|---|---|---|
+| Language | C++17 | Modern standard-library features and portability |
+| Build | CMake 3.16+ | Reproducible, cross-platform builds |
+| Tests | Google Test 1.14.0 | Focused unit and integration testing |
+| Compiler | GCC, Clang, or MSVC | Linux/WSL2 target with Windows support |
+| Static analysis | clang-tidy | Optional source analysis |
+| Runtime checks | AddressSanitizer/UBSan | Optional GCC/Clang diagnostics |
+| Debugging | GDB | Linux/WSL2 debugging workflow |
+| CI | GitHub Actions | Clean Ubuntu build and test verification |
+
+## 07 · Installation
+
+### Ubuntu or WSL2
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake git
+git clone <repository-url>
+cd Testing-
+```
+
+Google Test is fetched by CMake when no compatible local installation is found.
+
+### Configure and build
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --parallel
+```
+
+### Windows with MinGW
+
+```powershell
+cmake -S . -B build-gcc `
+  -G "MinGW Makefiles" `
+  -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-gcc --parallel
+```
+
+## 08 · Usage
+
+```text
+log_analyzer --input PATH [options]
+```
+
+| Option | Meaning |
+|---|---|
+| `--input PATH` | Input file; repeat for multiple files |
+| `--input -` | Read records from standard input |
+| `--input-format pipe\|jsonl\|csv` | Select record format; pipe is default |
+| `--severity INFO\|WARN\|ERROR` | Include one severity |
+| `--component NAME` | Include one component |
+| `--strict` | Stop at the first malformed record |
+| `--format text\|json` | Select report format; text is default |
+| `--output PATH` | Write the report to a file |
+| `--help` | Display usage information |
+
+### Pipe input
+
+```text
+2026-10-30 09:15:01|ERROR|AUDIO|Device initialization failed
+```
+
+```bash
+./build/log_analyzer --input app.log --input-format pipe
+```
+
+### JSON Lines input
+
+```json
+{"timestamp":"2026-10-30 09:15:01","severity":"ERROR","component":"AUDIO","message":"Device failed"}
+```
+
+```bash
+./build/log_analyzer --input events.jsonl --input-format jsonl
+```
+
+### CSV input
+
+```text
+2026-10-30 09:15:01,ERROR,AUDIO,"Device failed, retrying"
+```
+
+```bash
+./build/log_analyzer --input events.csv --input-format csv
+```
+
+### Multiple files
+
+```bash
+./build/log_analyzer \
+  --input logs/app-1.log \
+  --input logs/app-2.log \
+  --format json \
+  --output report.json
+```
+
+Standard input cannot be combined with file inputs because it is a single
+non-repeatable stream:
+
+```bash
+cat app.log | ./build/log_analyzer --input - --severity ERROR
+```
+
+PowerShell:
+
+```powershell
+Get-Content app.log | .\build-gcc\log_analyzer.exe --input -
+```
+
+## 09 · Domain contract
+
+- Timestamp format: `YYYY-MM-DD HH:MM:SS`.
+- Timestamps are timezone-unspecified; no timezone conversion occurs.
+- Supported severities are exactly `INFO`, `WARN`, and `ERROR`.
+- Pipe parsing uses the first three delimiters; later delimiters remain in the message.
+- Components and messages must not be empty.
+- Blank lines are malformed records.
+- Lenient mode is the default and reports malformed lines while continuing.
+- Strict mode stops at the first malformed record.
+- Repeated errors are identical messages among `ERROR` records, occurring more than once.
+- Empty input is valid and produces an empty analysis.
+
+## 10 · Testing and quality
+
+### Standard build and tests
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-On a multi-configuration generator such as Visual Studio, specify the
-configuration when building and testing:
+For Visual Studio multi-configuration builds:
 
 ```powershell
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-The domain model, parser, file reader, analysis engine, report formatter, and
-CLI orchestration are implemented.
+### Sanitizers
 
-The analysis engine supports severity and component filters, counts records by
-severity, counts errors by component, detects repeated error messages, and
-calculates the timestamp range. The formatter renders those results and reader
-diagnostics in deterministic text output.
-
-## CLI usage
-
-```text
-log_analyzer --input PATH [options]
-```
-
-Available options:
-
-- `--input PATH` (required): input log file
-- `--severity INFO|WARN|ERROR`: include only one severity
-- `--component NAME`: include only one component
-- `--strict`: stop at the first malformed record
-- `--output PATH`: write the report to a file instead of standard output
-- `--help`: print usage information
-
-In lenient mode, malformed records are omitted from analysis and included in
-the report's parse diagnostics section. Fatal input/output failures and strict
-validation failures are written to standard error.
-
-Example:
-
-```bash
-./build/log_analyzer --input samples/sample.log --severity ERROR
-```
-
-## Quality checks
-
-The project enables `-Wall -Wextra -Wpedantic` for GCC and Clang, and `/W4` for
-MSVC. Compilation commands are exported to `compile_commands.json`.
-
-On GCC or Clang, configure a sanitizer build separately:
+Use GCC or Clang with sanitizer runtimes installed:
 
 ```bash
 cmake -S . -B build-sanitized \
@@ -112,7 +313,7 @@ cmake --build build-sanitized
 ctest --test-dir build-sanitized --output-on-failure
 ```
 
-If `clang-tidy` is installed, enable it during configuration:
+### clang-tidy
 
 ```bash
 cmake -S . -B build-tidy \
@@ -121,51 +322,96 @@ cmake -S . -B build-tidy \
 cmake --build build-tidy
 ```
 
-`ENABLE_SANITIZERS` intentionally fails on unsupported compilers instead of
-silently producing an unsanitized build. `ENABLE_CLANG_TIDY` similarly requires
-`clang-tidy` to be available.
+The project enables `-Wall -Wextra -Wpedantic` for GCC/Clang and `/W4` for
+MSVC. The current validation suite contains 28 passing tests. GitHub Actions
+repeats the clean Ubuntu configure, build, and CTest workflow from
+[ci.yml](.github/workflows/ci.yml).
 
-## Debugging
-
-The supported debugging environment is Linux or WSL2 with GDB. A reproducible
-debug session can be started after a Debug build with:
-
-```bash
-gdb --args ./build/log_analyzer \
-  --input samples/sample.log \
-  --severity ERROR
-```
-
-Useful first commands are:
+## 11 · Project structure
 
 ```text
-break main
-run
-backtrace
-quit
+.
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── include/
+│   ├── CommandLine.h
+│   ├── LogAnalyzer.h
+│   ├── LogEntry.h
+│   ├── LogParser.h
+│   ├── LogReader.h
+│   ├── LogSeverity.h
+│   └── ReportFormatter.h
+├── src/
+│   ├── CommandLine.cpp
+│   ├── LogAnalyzer.cpp
+│   ├── LogParser.cpp
+│   ├── LogReader.cpp
+│   ├── LogSeverity.cpp
+│   ├── ReportFormatter.cpp
+│   └── main.cpp
+├── tests/
+│   ├── CMakeLists.txt
+│   ├── test_command_line.cpp
+│   ├── test_log_analyzer.cpp
+│   ├── test_log_parser.cpp
+│   ├── test_log_reader.cpp
+│   └── test_report_formatter.cpp
+├── samples/
+│   └── sample.log
+├── CMakeLists.txt
+├── README.md
+└── .gitignore
 ```
 
-No application defect was discovered during the current Windows validation
-run; therefore this phase does not claim a GDB defect fix. GDB investigation
-should be recorded here when a reproducible defect is found on Linux or WSL2.
+Generated `build*` directories are local CMake artifacts and are excluded by
+`.gitignore`; they are not required in source control.
 
-## Continuous integration
+## 12 · Roadmap
 
-GitHub Actions runs the documented configure, build, and CTest commands for
-pushes and pull requests using Ubuntu. The workflow is located at
-`.github/workflows/ci.yml`.
+The planned version 1 scope is complete through the current implementation
+phase. Possible future work:
+
+- [ ] Improve format diagnostics and add richer JSON validation.
+- [ ] Add optional progress reporting for very large inputs.
+- [ ] Add more report formats only when a consumer requires them.
+- [ ] Add performance benchmarks with reproducible datasets.
+- [ ] Add a graphical interface without moving business logic out of the core.
+
+Out of scope for version 1:
+
+- Networking
+- Databases
+- GUIs
+- Multithreading
+- Plugins
+- Hardware, ECU, RTOS, or vehicle integration
+- External AI services
+
+## 13 · Contribution
+
+1. Create a focused branch.
+2. Keep parser, reader, analyzer, formatter, and CLI responsibilities separate.
+3. Add or update tests for behavior changes.
+4. Run the build and CTest commands locally.
+5. Keep output deterministic.
+6. Update this README when CLI behavior changes.
+7. Open a pull request with a concise summary and validation results.
+
+Please do not commit generated `build*` directories, compiler databases, or
+local IDE metadata.
 
 ## Exit codes
 
-The application contract reserves these exit codes:
+```text
+0  Successful execution
+1  Fatal input/output or processing failure
+2  Invalid command-line usage
+3  Strict-mode data validation failure
+```
 
-- `0`: successful execution
-- `1`: fatal input/output or processing failure
-- `2`: invalid command-line usage
-- `3`: strict-mode data validation failure
+## Scope note
 
-## Scope limitations
-
-Version 1 is an offline diagnostic utility using simulated logs. It does not
-provide hardware, ECU, RTOS, vehicle, networking, database, GUI, multithreading,
+This is an offline diagnostic utility using simulated logs. It does not claim
+hardware, ECU, RTOS, vehicle, networking, database, GUI, multithreading,
 plugin, or external AI integration.

@@ -69,3 +69,24 @@ TEST(LogParserTest, RejectsBlankRecord) {
     LogParser parser;
     EXPECT_TRUE(std::holds_alternative<ParseDiagnostic>(parser.parse("")));
 }
+
+TEST(LogParserTest, ParsesJsonLinesRecord) {
+    LogParser parser;
+    const auto result = parser.parse(
+        R"({"timestamp":"2026-10-30 09:15:01","severity":"ERROR","component":"AUDIO","message":"Device failed"})",
+        InputFormat::JsonLines, 4);
+    ASSERT_TRUE(std::holds_alternative<LogEntry>(result));
+    const auto& entry = std::get<LogEntry>(result);
+    EXPECT_EQ(entry.component, "AUDIO");
+    EXPECT_EQ(entry.message, "Device failed");
+    EXPECT_EQ(entry.source_line, 4);
+}
+
+TEST(LogParserTest, ParsesCsvRecordWithQuotedMessage) {
+    LogParser parser;
+    const auto result = parser.parse(
+        "2026-10-30 09:15:01,ERROR,AUDIO,\"Device failed, retrying\"",
+        InputFormat::Csv, 2);
+    ASSERT_TRUE(std::holds_alternative<LogEntry>(result));
+    EXPECT_EQ(std::get<LogEntry>(result).message, "Device failed, retrying");
+}
